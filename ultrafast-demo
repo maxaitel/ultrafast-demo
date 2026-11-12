@@ -1,0 +1,75 @@
+#!/bin/zsh -f
+# Launch an API-billed Codex session without changing saved authentication.
+set -eu
+unsetopt XTRACE VERBOSE
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'HELP'
+Usage: ultrafast-demo [Codex options] [prompt]
+
+Starts interactive Codex with GPT-6.1 Sol, Ultrafast, and low reasoning.
+Loads your OpenAI API key from macOS Keychain.
+Uses API billing and leaves your saved Codex login and config unchanged.
+Refreshes its own model catalog from the installed CLI on each launch.
+
+Setup:
+  ultrafast-demo --setup-key   Save or replace a key using a private prompt
+  ultrafast-demo --key-status  Check whether a key is stored (never displays it)
+
+Examples:
+  ultrafast-demo
+  ultrafast-demo -C /path/to/project
+  ultrafast-demo "Build a small interactive demo"
+  ultrafast-demo -m gpt-6-astra
+
+Confirm that Codex displays Ultrafast before presenting the demo.
+HELP
+  exit 0
+fi
+
+demo_keychain="${0:A:h}/ultrafast-demo-keychain"
+if [[ ! -x "$demo_keychain" ]]; then
+  print -u2 -- 'ultrafast-demo: the Keychain helper is missing.'
+  exit 1
+fi
+
+if [[ "${1:-}" == "--key-status" ]]; then
+  exec "$demo_keychain" status
+fi
+
+if [[ "${1:-}" == "--setup-key" ]]; then
+  if ! IFS= read -rs 'demo_key_input?Paste OpenAI API key to save in Keychain (hidden): ' < /dev/tty; then
+    print -u2 -- '\nultrafast-demo: run setup in an interactive terminal.'
+    exit 1
+  fi
+  print -u2
+  # The key travels through a pipe, never in an external process argument.
+  set -o pipefail
+  print -rn -- "$demo_key_input" | "$demo_keychain" set
+  unset demo_key_input
+  exit 0
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  print -u2 -- 'ultrafast-demo: codex is not available on PATH.'
+  exit 127
+fi
+
+demo_catalog=$(python3 "${0:A:h}/ultrafast-demo-catalog.py") || exit $?
+DEMO_OPENAI_API_KEY=$("$demo_keychain" get) || exit $?
+export DEMO_OPENAI_API_KEY
+
+exec codex --no-daemon \
+  -m gpt-6.1-sol \
+  -c 'model_provider="ultrafast_demo"' \
+  -c 'model_providers.ultrafast_demo.name="OpenAI API Demo"' \
+  -c 'model_providers.ultrafast_demo.base_url="https://api.openai.com/v1"' \
+  -c 'model_providers.ultrafast_demo.env_key="DEMO_OPENAI_API_KEY"' \
+  -c 'model_providers.ultrafast_demo.requires_openai_auth=false' \
+  -c 'model_providers.ultrafast_demo.wire_api="responses"' \
+  -c 'model_providers.ultrafast_demo.supports_websockets=true' \
+  -c "model_catalog_json=\"${demo_catalog}\"" \
+  -c 'features.ultrafast_mode=true' \
+  -c 'service_tier="ultrafast"' \
+  -c 'model_reasoning_effort="low"' \
+  "$@"
